@@ -1,64 +1,8 @@
-from os import fdopen, read, write
-import os
-
-def createNullFile_cluster(cluster:int,f):
-    size = cluster*8*512
-    f.seek(size-1)
-    f.write(b"\0")
-def createNullFile_gb(num_gb:int,f):
-    size = 1073741824* num_gb
-    f.seek(size-1)
-    f.write(b"\0")
-def writeblock(byte_val,block_num,block_size,f):
-    f.seek(block_num*block_size)
-    byte_block = b''.join([byte_val,bytearray(block_size)])[:512] # write 
-    f.write(byte_block)
-def readblock(block_num,block_size,f):
-    f.seek(block_num*block_size)
-    return f.read(block_size)
-def writeoffset(byte_val,offset_num,block_num,block_size,f):
-    block = readblock(block_num,block_size,f)
-    # print(type(block[offset_num+byte_val:]))
-    new_block = b''.join([block[:offset_num],byte_val,block[offset_num+len(byte_val):]])
-    writeblock(new_block,block_num,block_size,f)
-def readoffset(block_num,offset_num,offset_size,block_size,f):
-    block = readblock(block_num,block_size,f)
-    return block[offset_num:offset_num+offset_size]
- 
-def createVolume(volume_name,volume_size_gb): 
-    '''
-    volume_size : Tính theo gb
-    '''
-    if(os.path.exists(volume_name)):
-        print("Khong the khoi tao file moi do ten file '{}' da ton tai !".format(volume_name))
-        return
-    f = open(volume_name,'w+b')
-    createNullFile_gb(volume_size_gb,f)
-
-    header_list = []
-    block_size = 512 # 1 sector = 512 byte
-    clustersize_sector = 8 #1 cluster = 8 sector
-    volume_size = int(volume_size_gb*1000000/block_size)
-    bootsector_size = 1 # bootsector chiếm 1 sector
-    N_r = 2 #số bảng FAT
-    print(((block_size*clustersize_sector)/(4)+N_r))
-    FAT_size = int((volume_size-1)/((block_size*clustersize_sector)/(4)+N_r))+1
-    RDET_start = (int)((int)(bootsector_size+FAT_size*N_r)/(int)(clustersize_sector))+1
-    header_list.append(block_size.to_bytes(2,'little'))
-    header_list.append(clustersize_sector.to_bytes(1,'little'))
-    header_list.append(bootsector_size.to_bytes(2,'little'))
-    header_list.append(N_r.to_bytes(1,'little'))
-    header_list.append(volume_size.to_bytes(4,'little'))
-    header_list.append(FAT_size.to_bytes(4,'little'))
-    header_list.append(RDET_start.to_bytes(4,'little'))
-    # list : [header_list(2byte),cluster_size(1 byte)] => join => byte(3byte)
-    writeblock(b''.join(header_list),0,block_size,f)
-    temp = 268435455
-    two_element_FAT = temp.to_bytes(4,'little') + temp.to_bytes(4,'little')
-    writeblock(two_element_FAT,bootsector_size,block_size,f)
-    f.close()
+from sector import *
 
 class volume:
+    def clusterstart_sector(self,cluster_num):
+        return self.bootsector_size+self.FATsize_sector*self.Nr+self.clustersize_sector+cluster_num*self.block_size
     def __init__(self,volume_name,block_size=512) -> None:
         self.f = open(volume_name,"r+b")
         data_block = readblock(0,block_size,self.f)
@@ -68,11 +12,11 @@ class volume:
         for size in sizes:
             data.append(int.from_bytes(data_block[i:i+size],'little'))
             i = i+size
-        print(data)
+        #print(data)
         self.block_size = data[0]
         self.clustersize_sector = data[1]
         self.bootsector_size = data[2]
-        self.Nr = data[3]
+        self.Nr = data[3] 
         self.volume_size = data[4]
         self.FATsize_sector = data[5]
         self.RDET_start = data[6]
@@ -96,7 +40,10 @@ class volume:
 
         new_entry = RDET_entry(bytearray(32))
         new_entry.filename= source.split('/')[-1]
-
+        for entry in self.RDET_table:
+            if entry.filename == new_entry.filename:
+                print("Ten file '{}' da duoc dat! Vui long dat ten khac".format(entry.filename))
+                return
         new_entry.filesize = os.path.getsize(source)
         new_entry.state= 0x20
         cluster_needed = (int)(new_entry.filesize/(self.clustersize_sector* self.block_size))+1
@@ -112,8 +59,11 @@ class volume:
 
         self.FAT_table[cluster_list[-1]]= eof
         for i in range(cluster_needed):
-            data = readblock(i,self.block_size,input)
-            writeblock(data,self.bootsector_size+self.FATsize_sector*self.Nr+self.clustersize_sector+cluster_list[i],self.block_size,self.f)
+            start = self.clusterstart_sector(cluster_list[i])
+            for j in range(self.clustersize_sector):
+                data = readblock(i*self.clustersize_sector+j,self.block_size,input)
+                writeblock(data,start + j,self.block_size,self.f)
+                
         new_entry.clusterstart = cluster_list[0]
         for i in range(len(self.RDET_table)):
             if(self.RDET_table[i].isNull()):
@@ -144,8 +94,32 @@ class volume:
                 writeblock(block,self.bootsector_size+k,self.block_size,self.f)
                 k = k+1
                 block = bytes()
+    def exportFile(self,out_dir,source):
+        file_name = source.split('/')[-1]
+        file_entry = -1
+        for entry in self.RDET_table:
+            if(file_name == entry.filename):
+                file_entry = entry
+                break
+        if file_entry == -1:
+            print("Khong ton tai file can export !")
+            return
+        cluster_list = []
+        cur_cluster = file_entry.clusterstart
+        while(cur_cluster != 268435455): #cur_cluster khac 0FFFFFFF
+            cluster_list.append(cur_cluster)
+            cur_cluster = self.FAT_table[cur_cluster]
+        out = open(out_dir+file_name,'w+b')
+        for j in range(len(cluster_list)):
+            start = self.clusterstart_sector(cluster_list[j])
+            for i in range(self.clustersize_sector):
+                data = readblock(start+i,self.block_size,self.f)
+                writeblock(data,j*8+i,self.block_size,out)
+        out.close()
     def closeVolume(self):
         self.f.close()
+    def clusterstart_sector(self,cluster_num):
+        return (int)(self.bootsector_size+self.FATsize_sector*self.Nr+self.clustersize_sector+(cluster_num-2)*self.clustersize_sector)
 class RDET_entry:
     def __init__(self,data_block) -> None:
         assert len(data_block)==32,"data_block of RDET not equal 32 bit ! Fuck you"
@@ -179,20 +153,3 @@ class RDET_entry:
         return self.filename == ''
     def printscreen(self):
         print("{}\t{}\t{}\t{}".format(self.filename,self.state,self.clusterstart,self.filesize))
-# createVolume("test1.dat",2)
-vol_1 = volume("test1.dat",512)
-# vol_1.addFile("./","./add.txt")
-vol_1.closeVolume()
-# f = open("MyFS.dat","r+b")
-# block_size = 512
-# createNullFile_cluster(1,f)
-# int_val = 12
-# byte_val = int_val.to_bytes(2,'little')
-
-# # #writeblock(byte_val,0,block_size,f)
-# writeoffset(byte_val,3,0,block_size,f)
-# byte_val = readoffset(0,3,2,block_size,f)
-# print(int.from_bytes(byte_val,'little'))
-# # print(int.from_bytes(readoffset(0,3,2,block_size,f),'little'))
-# #f = createVolume("MyFS.dat")
-# f.close()
