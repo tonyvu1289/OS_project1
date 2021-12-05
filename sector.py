@@ -1,6 +1,6 @@
 from os import fdopen, read, write
 import os
-
+import fat_32
 def createNullFile_cluster(cluster:int,f):
     size = cluster*8*512
     f.seek(size-1)
@@ -24,7 +24,6 @@ def writeoffset(byte_val,offset_num,block_num,block_size,f):
 def readoffset(block_num,offset_num,offset_size,block_size,f):
     block = readblock(block_num,block_size,f)
     return block[offset_num:offset_num+offset_size]
-
 def createVolume(volume_name,volume_size_gb): 
     '''
     volume_size : Tính theo gb
@@ -56,4 +55,22 @@ def createVolume(volume_name,volume_size_gb):
     temp = 268435455
     two_element_FAT = temp.to_bytes(4,'little') + temp.to_bytes(4,'little')
     writeblock(two_element_FAT,bootsector_size,block_size,f)
+    rdet_start = fat_32.RDET_entry(bytearray(32))
+    rdet_cur = fat_32.RDET_entry(bytearray(32))
+    rdet_cur.filename = "."
+    rdet_cur.state = 0x10
+    rdet_cur.clusterstart = 0
+    rdet_cur.clusternext = 0 #khong co
+    rdet_cur.filesize = block_size
+    rdet_start.filename = ".."
+    rdet_start.state = 0x10
+    rdet_start.clusterstart = 0 #khong co
+    rdet_cur.clusternext = 0 #khong co
+    rdet_cur.filesize = block_size
+    writeblock(b''.join([rdet_start.toBlock(),rdet_cur.toBlock()]),bootsector_size+FAT_size*N_r,block_size,f)
     f.close()
+def hashString_4byte(str):
+    res = 0
+    for char in str:
+        res+= ord(char) % 256
+    return res.to_bytes(4,'little')
