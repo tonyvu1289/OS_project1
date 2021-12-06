@@ -1,6 +1,11 @@
 from os import fdopen, read, write
 import os
 import fat_32
+def hashString_4byte(str):
+    res = 0
+    for char in str:
+        res+= ord(char) % 65536
+    return res.to_bytes(4,'little')
 def createNullFile_cluster(cluster:int,f):
     size = cluster*8*512
     f.seek(size-1)
@@ -24,16 +29,15 @@ def writeoffset(byte_val,offset_num,block_num,block_size,f):
 def readoffset(block_num,offset_num,offset_size,block_size,f):
     block = readblock(block_num,block_size,f)
     return block[offset_num:offset_num+offset_size]
-def createVolume(volume_name,volume_size_gb): 
+def createVolume(volume_name,volume_size_gb,password=""): 
     '''
     volume_size : Tính theo gb
     '''
     if(os.path.exists(volume_name)):
         print("Khong the khoi tao file moi do ten file '{}' da ton tai !".format(volume_name))
-        return
+        return -1
     f = open(volume_name,'w+b')
     createNullFile_gb(volume_size_gb,f)
-
     header_list = []
     block_size = 512 # 1 sector = 512 byte
     clustersize_sector = 8 #1 cluster = 8 sector
@@ -50,6 +54,7 @@ def createVolume(volume_name,volume_size_gb):
     header_list.append(volume_size.to_bytes(4,'little'))
     header_list.append(FAT_size.to_bytes(4,'little'))
     header_list.append(RDET_start.to_bytes(4,'little'))
+    header_list.append(hashString_4byte(password))
     # list : [header_list(2byte),cluster_size(1 byte)] => join => byte(3byte)
     writeblock(b''.join(header_list),0,block_size,f)
     temp = 268435455
@@ -69,8 +74,3 @@ def createVolume(volume_name,volume_size_gb):
     rdet_cur.filesize = block_size
     writeblock(b''.join([rdet_start.toBlock(),rdet_cur.toBlock()]),bootsector_size+FAT_size*N_r,block_size,f)
     f.close()
-def hashString_4byte(str):
-    res = 0
-    for char in str:
-        res+= ord(char) % 256
-    return res.to_bytes(4,'little')

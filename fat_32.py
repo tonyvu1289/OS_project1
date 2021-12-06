@@ -3,13 +3,19 @@ import math
 #EOF cluster is 268435455 (cause i like it)
 #JK microsoft like it, not me =))
 class volume:
+    def changeVolumePass(self,oldpass,newpass):
+        if(self.volume_pass != int.from_bytes(hashString_4byte(oldpass),'little')):
+            print("mat khau cu khong dung!")
+            return
+        writeoffset(hashString_4byte(newpass),18,0,self.block_size,self.f)
+
     def clusterstart_sector(self,cluster_num):
         return self.bootsector_size+self.FATsize_sector*self.Nr+self.clustersize_sector+cluster_num*self.block_size
-    def __init__(self,volume_name,block_size=512) -> None:
+    def __init__(self,volume_name,block_size=512,password="") -> None:
         self.f = open(volume_name,"r+b")
         data_block = readblock(0,block_size,self.f)
         data = []
-        sizes = [2,1,2,1,4,4,4]
+        sizes = [2,1,2,1,4,4,4,4]
         i = 0
         for size in sizes:
             data.append(int.from_bytes(data_block[i:i+size],'little'))
@@ -22,6 +28,10 @@ class volume:
         self.volume_size = data[4]
         self.FATsize_sector = data[5]
         self.RDET_start = data[6]
+        self.volume_pass = data[7]
+        if(hashString_4byte(password) != data[7].to_bytes(4,'little')):
+            print("Mat khau truy cap volume khong dung, vui long nhap lai!")
+            assert False
         self.FAT_table = []
         self.RDET_table = []
         FAT_byte = bytes()
@@ -104,7 +114,11 @@ class volume:
                 block = bytes()
     def exportFile(self,out_dir,source,password=""):
         file_name = source.split('/')[-1]
-        file_entry = self.findEntry(file_name)
+        file_entry = -1
+        for entry in self.RDET_table:
+            if(entry.filename == file_name):
+                file_entry = entry
+                break
         hash_value = int.from_bytes(hashString_4byte(password),'little')
         if file_entry == -1:
             print("Khong ton tai file can export !")
@@ -164,7 +178,10 @@ class volume:
         return (int)(self.bootsector_size+self.FATsize_sector*self.Nr+self.clustersize_sector+(cluster_num-2)*self.clustersize_sector)
     def updatePassword(self,file_name,password,newpass):
         #check pass và trả về cluster-list (cluster real)
-        file_entry = self.findEntry(file_name.split('/')[-1])
+        file_entry = -1
+        for entry in self.RDET_table:
+            if entry.filename == file_name:
+                file_entry = entry
         hash_value = int.from_bytes(hashString_4byte(password),'little')
         if file_entry == -1:
             print("Khong co file nao ten {} de cap nhat password !".format(file_name))
@@ -188,7 +205,10 @@ class volume:
         self.FAT_table[cluster_list[-1]]= eof + hash_value
         self.updateFAT()
     def deleteFile(self,file_name,password=""):
-        file_entry = self.findEntry(file_name)
+        file_entry = -1
+        for entry in self.RDET_table:
+            if entry.filename == file_name:
+                file_entry = entry
         hash_value = int.from_bytes(hashString_4byte(password),'little')
         if file_entry == -1:
             print("Khong co file nao ten {} de xoa !".format(file_name))
@@ -225,57 +245,57 @@ class volume:
         for i in range(self.clustersize_sector):
             data_block = b''.join(new_det[i*16:i*16+16])
             writeblock(data_block,start,self.block_size,self.f)
-    def addFolder(self,dir,folder_name):
-        dir = dir.split('/')
-        parent_entry = self.findEntry(dir)
-        new_entry = RDET_entry(bytearray(32))
-        new_entry.filename= folder_name
-        #xử lý tên trùng
-        # for entry in self.RDET_table:
-        #     if entry.filename == new_entry.filename:
-        #         print("Ten file '{}' da duoc dat! Vui long dat ten khac".format(entry.filename))
-        #         return
-        #tạo entry, khởi tạo giá trị các thứ cho entry
-        new_entry.filesize = self.clustersize_sector*self.block_size
-        new_entry.state= 0x10
-        cluster_needed = (int)(math.ceil((new_entry.filesize/(self.clustersize_sector* self.block_size))))
-        cluster_list = [] 
-        #update entry thư mục mới tạo vào SDET của thư mục cha
-        self.updateDetTableOfFolder(parent_entry,self.detTableOfFolder(parent_entry).append(new_entry))
-        #cluster list chứa các cluster trống khi chưa hash, không hash trên đây
-        #tìm cluster_list là list các cluster trống sẽ dùng
-        for i in range(len(self.FAT_table)):
-            if(self.FAT_table[i]==0):
-                cluster_list.append(i)
-            if(len(cluster_list)==cluster_needed):
-                break
-        #ghi các cluster vào bảng FAT
-        for i in range(len(cluster_list)-1):
-            self.FAT_table[cluster_list[i]] = cluster_list[i+1]
-        eof = 268435455
-        self.FAT_table[cluster_list[-1]]= eof
-        #ghi dữ liệu folder (SDET mới) vào phần data
-        new_entry_detTable = []
-        rdet_start = fat_32.RDET_entry(bytearray(32))
-        rdet_cur = fat_32.RDET_entry(bytearray(32))
-        rdet_cur.filename = "."
-        rdet_cur.state = 0x10
-        rdet_cur.clusterstart = cluster_list[0]
-        rdet_cur.clusternext = 0 #khong co
-        rdet_cur.filesize = self.block_size
-        rdet_start.filename = ".."
-        rdet_start.state = 0x10
-        rdet_start.clusterstart = parent_entry.clusterstart #khong co
-        rdet_cur.clusternext = 0 #khong co
-        rdet_cur.filesize = self.block_size
-        new_entry_detTable.append(rdet_cur)
-        new_entry_detTable.append(rdet_start)
-        self.updateDetTableOfFolder(new_entry,new_entry_detTable)
-        #cập nhật cluster bắt đầu vào rdet
+    # def addFolder(self,dir,folder_name):
+    #     dir = dir.split('/')
+    #     #parent_entry = self.findEntry(dir)
+    #     new_entry = RDET_entry(bytearray(32))
+    #     new_entry.filename= folder_name
+    #     #xử lý tên trùng
+    #     # for entry in self.RDET_table:
+    #     #     if entry.filename == new_entry.filename:
+    #     #         print("Ten file '{}' da duoc dat! Vui long dat ten khac".format(entry.filename))
+    #     #         return
+    #     #tạo entry, khởi tạo giá trị các thứ cho entry
+    #     new_entry.filesize = self.clustersize_sector*self.block_size
+    #     new_entry.state= 0x10
+    #     cluster_needed = (int)(math.ceil((new_entry.filesize/(self.clustersize_sector* self.block_size))))
+    #     cluster_list = [] 
+    #     #update entry thư mục mới tạo vào SDET của thư mục cha
+    #     self.updateDetTableOfFolder(parent_entry,self.detTableOfFolder(parent_entry).append(new_entry))
+    #     #cluster list chứa các cluster trống khi chưa hash, không hash trên đây
+    #     #tìm cluster_list là list các cluster trống sẽ dùng
+    #     for i in range(len(self.FAT_table)):
+    #         if(self.FAT_table[i]==0):
+    #             cluster_list.append(i)
+    #         if(len(cluster_list)==cluster_needed):
+    #             break
+    #     #ghi các cluster vào bảng FAT
+    #     for i in range(len(cluster_list)-1):
+    #         self.FAT_table[cluster_list[i]] = cluster_list[i+1]
+    #     eof = 268435455
+    #     self.FAT_table[cluster_list[-1]]= eof
+    #     #ghi dữ liệu folder (SDET mới) vào phần data
+    #     new_entry_detTable = []
+    #     rdet_start = fat_32.RDET_entry(bytearray(32))
+    #     rdet_cur = fat_32.RDET_entry(bytearray(32))
+    #     rdet_cur.filename = "."
+    #     rdet_cur.state = 0x10
+    #     rdet_cur.clusterstart = cluster_list[0]
+    #     rdet_cur.clusternext = 0 #khong co
+    #     rdet_cur.filesize = self.block_size
+    #     rdet_start.filename = ".."
+    #     rdet_start.state = 0x10
+    #     rdet_start.clusterstart = parent_entry.clusterstart #khong co
+    #     rdet_cur.clusternext = 0 #khong co
+    #     rdet_cur.filesize = self.block_size
+    #     new_entry_detTable.append(rdet_cur)
+    #     new_entry_detTable.append(rdet_start)
+    #     self.updateDetTableOfFolder(new_entry,new_entry_detTable)
+    #     #cập nhật cluster bắt đầu vào rdet
         
-        #new_entry.clusternext = cluster_list[1]
-        # self.updateRDET()
-        self.updateFAT()
+    #     #new_entry.clusternext = cluster_list[1]
+    #     # self.updateRDET()
+    #     self.updateFAT()
        
 class RDET_entry:
     def __init__(self,data_block) -> None:
